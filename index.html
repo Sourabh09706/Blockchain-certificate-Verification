@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blockchain Certificate Verification</title>
+<style>
+:root{--navy:#14213d;--blue:#2563eb;--bg:#f3f6fb;--green:#15803d;--red:#b91c1c}
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:#172033}
+header{background:var(--navy);color:white;padding:22px 16px;text-align:center}
+header h1{font-size:23px;margin:0 0 8px}header p{margin:0;color:#dbeafe;font-size:14px}
+main{max-width:900px;margin:20px auto;padding:0 14px}
+.card{background:white;border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 3px 14px #1e293b12}
+h2{font-size:19px;margin:0 0 14px}.muted{color:#64748b;font-size:13px;line-height:1.5}
+label{display:block;font-weight:bold;font-size:13px;margin:12px 0 6px}
+input{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px}
+button{border:0;border-radius:8px;padding:12px 15px;background:var(--blue);color:white;font-weight:bold;font-size:14px;cursor:pointer;margin-top:12px}
+button.secondary{background:#475569}button.danger{background:#b91c1c}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.status{padding:12px;border-radius:8px;margin-top:12px;font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.good{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.info{background:#dbeafe;color:#1e40af}
+.block{border:1px solid #dbe3ef;border-radius:10px;padding:12px;margin:10px 0;overflow-wrap:anywhere}
+.block strong{color:#1e40af}.hash{font-family:monospace;font-size:11px;color:#475569;overflow-wrap:anywhere;margin-top:6px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.actions button{flex:1}
+footer{text-align:center;color:#64748b;font-size:12px;padding:10px 16px 28px}
+@media(max-width:560px){.row{grid-template-columns:1fr}header h1{font-size:20px}.card{padding:15px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Blockchain Certificate Verification System</h1>
+  <p>Register, store and verify academic certificates</p>
+</header>
+<main>
+  <section class="card">
+    <h2>1. Register a certificate (Admin)</h2>
+    <p class="muted">Enter certificate details. A unique certificate ID and SHA-256 block hash will be generated.</p>
+    <form id="certificateForm">
+      <label for="student">Student name</label><input id="student" required maxlength="80" placeholder="e.g. Amandeep Singh">
+      <div class="row">
+        <div><label for="roll">Roll number</label><input id="roll" required maxlength="30" placeholder="e.g. BCA2026-01"></div>
+        <div><label for="course">Course / qualification</label><input id="course" required maxlength="80" placeholder="e.g. Bachelor of Computer Applications"></div>
+      </div>
+      <label for="institution">Institution name</label><input id="institution" required maxlength="100" placeholder="e.g. ABC College">
+      <div class="row">
+        <div><label for="issueDate">Issue date</label><input id="issueDate" type="date" required></div>
+        <div><label for="grade">Grade / result (optional)</label><input id="grade" maxlength="30" placeholder="e.g. A / 8.2 CGPA"></div>
+      </div>
+      <button type="submit">Add certificate to blockchain</button>
+    </form>
+    <div id="addMessage" aria-live="polite"></div>
+  </section>
+
+  <section class="card">
+    <h2>2. Verify a certificate</h2>
+    <p class="muted">Enter a certificate ID to check whether its saved data and blockchain links are unchanged.</p>
+    <label for="verifyId">Certificate ID</label>
+    <input id="verifyId" placeholder="e.g. CERT-..." autocapitalize="characters">
+    <button id="verifyBtn">Verify certificate</button>
+    <div id="verifyMessage" aria-live="polite"></div>
+  </section>
+
+  <section class="card">
+    <h2>3. Blockchain records</h2>
+    <p class="muted">Each block contains certificate data, the previous block's hash and its own hash.</p>
+    <div class="actions">
+      <button class="secondary" id="refreshBtn">Refresh records</button>
+      <button class="danger" id="resetBtn">Clear demo data</button>
+    </div>
+    <div id="chainSummary" class="status info">Loading records...</div>
+    <div id="chain"></div>
+  </section>
+  <section class="card">
+    <h2>About this demonstration</h2>
+    <p class="muted">This project demonstrates a basic hash-linked ledger in one browser using SHA-256 and local storage. It is not a production system: there is no central server, user authentication, digital signature, distributed consensus or protection against someone editing browser storage directly. Use sample data only.</p>
+  </section>
+</main>
+<footer>BCA Academic Project • Blockchain Certificate Verification System</footer>
+<script>
+"use strict";
+const STORAGE_KEY = "bca_certificate_blockchain_v1";
+const GENESIS_HASH = "0".repeat(64);
+const $ = id => document.getElementById(id);
+
+async function sha256(text) {
+  if (!window.crypto || !crypto.subtle) {
+    throw new Error("SHA-256 needs a secure browser context. Open this page using an HTTPS website such as Replit.");
+  }
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+function loadChain() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) { return []; }
+}
+function saveChain(chain) { localStorage.setItem(STORAGE_KEY, JSON.stringify(chain)); }
+function canonical(block) {
+  return JSON.stringify({
+    index:block.index, timestamp:block.timestamp, certificateId:block.certificateId,
+    data:block.data, previousHash:block.previousHash
+  });
+}
+function makeId() {
+  return "CERT-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).slice(2,7).toUpperCase();
+}
+async function renderChain() {
+  const chain = loadChain();
+  $("chainSummary").textContent = chain.length + " certificate block(s) stored in this browser.";
+  $("chain").innerHTML = "";
+  if (!chain.length) {
+    $("chain").innerHTML = '<p class="muted">No certificates yet. Add a sample certificate above.</p>';
+    return;
+  }
+  for (const b of chain) {
+    const el = document.createElement("div");
+    el.className = "block";
+    const title = document.createElement("strong");
+    title.textContent = "Block #" + b.index + " — " + b.certificateId;
+    const details = document.createElement("div");
+    details.className = "muted";
+    details.textContent = b.data.studentName + " | " + b.data.course + " | " + b.data.institution;
+    const prev = document.createElement("div"); prev.className="hash"; prev.textContent="Previous hash: "+b.previousHash;
+    const hash = document.createElement("div"); hash.className="hash"; hash.textContent="Block hash: "+b.hash;
+    el.append(title,details,prev,hash); $("chain").appendChild(el);
+  }
+}
+async function checkChain(chain) {
+  for (let i=0;i<chain.length;i++) {
+    const b=chain[i];
+    if (b.index!==i || b.previousHash!==(i===0?GENESIS_HASH:chain[i-1].hash)) return {ok:false,at:i,reason:"Block order or previous-hash link is invalid."};
+    const expected=await sha256(canonical(b));
+    if (expected!==b.hash) return {ok:false,at:i,reason:"Block data or hash has been changed."};
+  }
+  return {ok:true};
+}
+$("certificateForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const btn=event.submitter; btn.disabled=true; $("addMessage").textContent="";
+  try {
+    const chain=loadChain();
+    const integrity=await checkChain(chain);
+    if(!integrity.ok) throw new Error("Existing chain failed at block "+integrity.at+". Do not add new records.");
+    const data={
+      studentName:$("student").value.trim(),
+      rollNumber:$("roll").value.trim(),
+      course:$("course").value.trim(),
+      institution:$("institution").value.trim(),
+      issueDate:$("issueDate").value,
+      grade:$("grade").value.trim() || "Not specified"
+    };
+    const block={
+      index:chain.length,
+      timestamp:new Date().toISOString(),
+      certificateId:makeId(),
+      data,
+      previousHash:chain.length?chain[chain.length-1].hash:GENESIS_HASH
+    };
+    block.hash=await sha256(canonical(block));
+    chain.push(block); saveChain(chain);
+    $("addMessage").className="status good";
+    $("addMessage").textContent="Certificate added successfully. Certificate ID: "+block.certificateId;
+    $("verifyId").value=block.certificateId;
+    $("certificateForm").reset();
+    await renderChain();
+  } catch(err) {
+    $("addMessage").className="status bad"; $("addMessage").textContent=err.message;
+  } finally {btn.disabled=false;}
+});
+$("verifyBtn").addEventListener("click", async () => {
+  const id=$("verifyId").value.trim();
+  const out=$("verifyMessage"); out.className="status info"; out.textContent="Checking...";
+  try {
+    if(!id) throw new Error("Please enter a certificate ID.");
+    const chain=loadChain();
+    const integrity=await checkChain(chain);
+    if(!integrity.ok) {
+      out.className="status bad"; out.textContent="BLOCKCHAIN INTEGRITY FAILED at block "+integrity.at+": "+integrity.reason; return;
+    }
+    const found=chain.find(b=>b.certificateId.toLowerCase()===id.toLowerCase());
+    if(!found) {out.className="status bad";out.textContent="Certificate not found. It may be invalid or not registered in this browser.";return;}
+    out.className="status good";
+    out.textContent="VERIFIED — The certificate exists and the complete stored hash chain passed integrity checks. Student: "+found.data.studentName+" | Course: "+found.data.course+" | Institution: "+found.data.institution+" | Issue date: "+found.data.issueDate;
+  } catch(err) {out.className="status bad";out.textContent=err.message;}
+});
+$("refreshBtn").addEventListener("click",renderChain);
+$("resetBtn").addEventListener("click", async () => {
+  if(confirm("Delete all certificate records saved in this browser?")) {
+    localStorage.removeItem(STORAGE_KEY);
+    $("verifyMessage").textContent=""; $("addMessage").textContent="";
+    await renderChain();
+  }
+});
+renderChain();
+</script>
+</body>
+</html>
